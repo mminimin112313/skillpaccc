@@ -1,12 +1,13 @@
 ---
 name: url-knowledge-capture
 displayName: URL Knowledge Capture
-version: 1.0.0
-description: Convert a user-provided URL into a verified, reusable knowledge package: natural article, metadata, preserved outbound links, additional research, atomic resource notes, Zettelkasten relations with explicit reasons, and a Recall Cards child page.
+version: 2.0.0
+description: Compile a user-provided URL into a persistent, source-grounded personal wiki. Preserve source evidence, triage against existing knowledge, update or create wiki pages, preserve outbound resources, maintain Zettelkasten relations with explicit reasons, generate Recall Cards, and lint the knowledge graph.
 when_to_use:
-  - The user provides a URL and asks to process, archive, summarize, research, save, or put it in Notion.
+  - The user provides a URL and asks to process, archive, research, summarize, save, or put it in Notion.
   - The user says “이거 정리”, “이거 프로세스”, “노션에 넣어”, “큐도”, or equivalent while referring to a web source.
-  - The user asks what resources/links/projects they previously supplied and expects category- or relation-aware retrieval.
+  - The user asks what resources, links, or projects they previously supplied and expects relation-aware retrieval.
+  - The user wants a Karpathy-style LLM-maintained wiki rather than one-off summaries.
 argument-hint: "<url> [optional pasted body/context]"
 allowed-tools:
   - web
@@ -14,162 +15,201 @@ allowed-tools:
   - GitHub
 ---
 
-# URL Knowledge Capture
+# URL Knowledge Capture 2.0
 
-## Purpose
+## Design principle
 
-Turn one web source into a durable knowledge object rather than a disposable summary.
+This skill follows the LLM Wiki pattern described by Andrej Karpathy:
 
-A successful run preserves the original source, separates source claims from current verification, produces readable prose, captures every meaningful outbound URL, connects related notes by reason, and creates review cues in the user's existing Recall Cards structure.
+- **Source layer** — immutable evidence and provenance.
+- **Wiki layer** — mutable, LLM-maintained synthesis.
+- **Schema layer** — the rules in this skill.
 
-## Non-negotiable output contract
+Primary design reference:
+https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 
-For each URL, produce and persist this package:
+The goal is not to create one summary per URL. The goal is to make every accepted source improve the existing knowledge base.
 
-1. **Article** — a natural explanatory article written for a human reader.
-2. **Metadata** — source URL, source type, author/publisher when verified, captured date, source date when verified, topic, functions, verification state, and set name.
-3. **Cue page** — a child page named `큐` using `질문 → 힌트 → 정답보기` toggles.
-4. **Outbound-link preservation** — every meaningful URL contained in the source becomes a preserved link; when it represents a reusable tool/project/resource, create an atomic Resource Note.
-5. **Additional research** — verify current facts against official or primary sources when possible. Preserve both the historical/source claim and the current verified value when they differ.
-6. **Zettelkasten relations** — connect notes only when a meaningful relationship exists, and record *why* the connection exists.
+## Notion mapping
 
-Do not declare the run complete if one of these parts is silently omitted.
+Use the existing database `학습 큐 · Recall Cards` as the global index.
 
-## Destination: Recall Cards
+### Record types
 
-Use the existing Notion database `학습 큐 · Recall Cards`.
+- `유형 = 원문` — source-specific record; preserves provenance and a readable source article.
+- `유형 = 리소스` — atomic tool/project/model/paper/site/dataset/entity.
+- `유형 = 위키` — compiled topic/concept/comparison/overview page that can be rewritten as evidence accumulates.
+- `유형 = 안내` — operating instructions.
+- child page `큐` — recall cards owned by the source or wiki page.
 
-### Source/article record
+### Ingest disposition
 
-Create or update one database record with:
+Use `수집 판정`:
 
-- `유형 = 원문`
-- `질문 / 제목 = article title`
-- `원문 URL = exact user-provided URL`
-- `세트 = stable set name`
-- `태그 = retrieval-oriented tags`
-- `카테고리 = Source Note / <topic>`
-- `검증 상태 = 확인 | 부분 확인 | 미확인`
-- `관련 노트 = atomic Resource Notes directly derived from or materially related to this source`
-- `연결 이유 = why the Source Note is connected to those notes`
+- `New` — introduces a genuinely new concept/resource/page.
+- `Update` — materially improves one or more existing pages.
+- `Disputed` — conflicts with existing knowledge and requires both claims to remain visible.
+- `No material` — source is preserved but adds no meaningful knowledge.
 
-The article page itself owns the child page `큐`.
+A source may be both `New` and `Update`.
 
-### Cue child page
+## Non-negotiable architecture
 
-Create exactly one child page named `큐` below the article page.
+### 1. Source layer is evidence, not synthesis
 
-Repeat this structure:
+Always preserve:
 
-```text
-### Qn. <one focused recall question>
+- exact user-provided URL
+- author/publisher when verifiable
+- publication date when verifiable
+- user-pasted original text when supplied
+- directly contained outbound URLs
+- source claim wording when it matters historically
+- verification state
 
-**힌트:** <minimum cue that helps retrieval without giving away the answer>
+Never silently rewrite history to match current facts.
 
-<details>
-<summary>정답보기</summary>
-    <concise but complete answer>
-</details>
-```
+If the source says “300+ prompts” and the current site says “104 templates,” preserve both as separate statements.
 
-Cue design priorities:
+### 2. Wiki layer is compiled knowledge
 
-- structure
-- causality
-- comparison
-- application
-- evidence/verification when it changes interpretation
+Before writing a new conceptual page, search the existing wiki.
 
-Do not create trivia cards merely to increase card count.
+Then decide:
 
-## Workflow
+- same thesis → update existing page
+- new concept → create a new `위키` page
+- contradiction → update affected page with a disputed/conflict section
+- no new information → preserve source and stop compilation
 
-### 1. Preserve the source before interpreting it
+One ingest may update many existing pages. Do not limit the cascade to the source-specific page.
 
-Record the exact URL exactly as supplied.
+### 3. Schema layer is this skill
 
-Identify, when verifiable:
+The human should not need to remember filing rules. The skill owns:
 
-- author or publisher
-- publication time/date
-- source type
-- title or first-line claim
-- quoted or embedded parent source
+- source preservation
+- triage
+- page routing
+- metadata
+- relation semantics
+- cue generation
+- lint rules
 
-Never replace the original URL with a redirect or canonical URL. If a canonical/current URL differs, store both and label them.
+## Ingest workflow
 
-### 2. Acquire source content
+### STEP 1 — Capture
 
-Prefer the original page. If the source is inaccessible, use trustworthy mirrors, caches, quoted copies, official reposts, or other direct evidence.
+Fetch the source.
 
-Keep an evidence ledger internally:
+If inaccessible:
 
-- **source fact** — explicitly stated in the supplied source
-- **current verified fact** — confirmed from a current authoritative source
-- **inference** — synthesis derived from evidence
-- **unverified** — not established
+- preserve the exact URL
+- store any user-pasted body verbatim
+- mark `검증 상태 = 미확인`
+- do not invent body, links, claims, or cues
+- create a pending Source Note only
 
-If the actual body cannot be recovered, do **not** invent the article, outbound links, or cues. Create/update a pending Source Note with `검증 상태 = 미확인`, record the retrieval failure, preserve the exact URL, and stop content synthesis until the body becomes available.
+If the source becomes available later, update the same Source Note instead of creating a duplicate.
 
-### 3. Extract outbound URLs
+### STEP 2 — Extract source graph
 
-Collect all meaningful URLs in the **supplied source itself**, including URLs mentioned as plain domains when the intended destination is clear. Default traversal depth is one hop: preserve and research links directly present in the supplied source, but do not recursively explode every link contained inside a large linked corpus.
+Extract directly meaningful URLs from the supplied source.
 
-When a directly linked resource is itself a large index or dataset (for example, hundreds of GitHub prompt files or source-post links), preserve that collection as one atomic Resource Note and capture its machine-readable index/data path. Only fan out its children when the user asks, when a small bounded subset is materially useful, or when individual children are independently central to the article.
+Default traversal depth is one hop.
 
-For each link:
+For each outbound URL:
 
-- preserve the original URL
-- identify the resource name
-- classify its role/function
-- verify whether it is currently active when material
-- note redirects, renamed products, archival status, or changed domains
+- preserve original URL
+- identify canonical/current URL if different
+- classify platform separately from function
+- determine whether it deserves an atomic Resource Note
+- preserve redirects, rename history, archival state, or current unavailability
 
-Do not collapse GitHub/Civitai/Hugging Face/etc. into functional categories. Platform is provenance; category/function is what the resource does.
+Do not recursively explode a large corpus. If a linked repository contains hundreds of children, capture the repository/index/data path first and fan out only when useful.
 
-### 4. Additional research
+### STEP 3 — Triage against existing wiki
 
-Research claims that are current, quantitative, comparative, or operationally important.
+Before compilation, search existing Notion pages using:
 
-Prefer:
+- exact project/entity names
+- aliases
+- synonyms
+- functional category
+- related technology
+- existing source URL
 
-1. official project/product documentation
-2. primary repositories or papers
+Assign disposition:
+
+`New | Update | Disputed | No material`
+
+State the disposition internally before editing.
+
+### STEP 4 — Additional research
+
+Research current, quantitative, comparative, or operational claims.
+
+Source preference:
+
+1. official project/product docs
+2. primary repositories/papers
 3. first-party release notes
 4. high-quality secondary sources
-5. community reports only for community experience/reaction
+5. community reports only for community experience
 
-When source and current facts differ, write both:
+Keep four evidence classes separate:
 
-```text
-Source claim: 300+ prompts
-Current official value: 104 templates, 14 UI screens
-```
+- **Source fact** — stated in the supplied source
+- **Current verified fact** — confirmed from current authoritative evidence
+- **Inference** — synthesis
+- **Unverified** — unresolved
 
-Never silently overwrite history with the current value.
+### STEP 5 — Compile, do not append blindly
 
-### 5. Write the article
+For each durable idea, decide its home.
 
-The article must read like edited human prose, not database output.
+- Update existing concept/overview pages when the new source changes their understanding.
+- Create a new `위키` page only when no existing page has the same core thesis.
+- Create/update atomic `리소스` notes for independently reusable objects.
+- Keep the source-specific article readable, but do not force every durable insight to live only there.
 
-Use this causal flow unless the subject requires a stronger domain-specific ordering:
+The test:
+
+> If this source disappeared tomorrow, would the durable idea still exist in the right wiki page?
+
+If no, compilation is incomplete.
+
+### STEP 6 — Write the source article
+
+The source record must still contain a natural article because the user wants a readable posting for each URL.
+
+Use this flow:
 
 `direct thesis → problem/cause → mechanism/structure → trade-off/result → application`
 
 Requirements:
 
+- substantial articles have a table of contents
 - first paragraph answers what matters
-- include a table of contents for substantial articles
-- use stable terminology
-- distinguish fact, measurement, inference, and uncertainty
-- explain relations through mechanism, not generic transitions
-- remove meta prose such as “this connection is important,” “the interesting point is,” or “the key takeaway is” when the following sentence can state the substance directly
-- avoid title spam, one-sentence paragraphs, and mechanical advantage/disadvantage lists
-- preserve natural Korean editorial rhythm when writing in Korean
+- stable terminology
+- facts, measurements, inference, and uncertainty remain distinct
+- no generic meta sentences such as “this connection is important”
+- no mechanical listicle structure when prose explains better
+- natural Korean editorial rhythm when writing in Korean
 
-### 6. Create atomic Resource Notes
+### STEP 7 — Create atomic Resource Notes
 
-Create one Resource Note per reusable tool, project, model, paper, library, dataset, site, or other independently retrievable object.
+Create one Resource Note per reusable:
+
+- tool
+- project
+- library
+- model
+- paper
+- dataset
+- site
+- product
+- protocol
 
 Recommended fields:
 
@@ -180,125 +220,167 @@ Recommended fields:
 - `태그`
 - `카테고리`
 - `검증 상태`
-- `출처 포스팅 = Source Note relation`
+- `수집 판정`
+- `출처 포스팅`
 - `관련 노트`
 - `연결 이유`
 
-A Resource Note body should answer:
+### STEP 8 — Build Zettelkasten edges
 
-1. 무엇인가
-2. 무엇을 해결하는가 / 어디에 쓰는가
-3. 현재 확인된 사실
-4. 이 Source Note에서 왜 저장했는가
-5. 다른 노트와 왜 연결되는가
+Do not connect notes because they share a tag.
 
-### 7. Build Zettelkasten relations
+Create a relation only when it captures reasoning.
 
-Do not create relations because two notes share a tag.
+Allowed relation semantics include:
 
-Create a relation only when it adds recoverable reasoning. Useful relation types include:
+- Source
+- Uses
+- Feeds into
+- Alternative to
+- Complements
+- Implements
+- Reference for
+- Built on
+- Same problem, different layer
+- Inspired by / Derived from
+- Updates / Supersedes
+- Disputes
 
-- **Source** — discovered/derived from
-- **Uses** — A directly uses B
-- **Feeds into** — A's output becomes B's input
-- **Alternative to** — same problem, materially different approach
-- **Complements** — combined use covers different needs
-- **Implements** — implementation of a concept/reference
-- **Reference for** — used as a design/evaluation reference
-- **Built on** — dependency/foundation
-- **Same problem, different layer** — same goal at different abstraction levels
-- **Inspired by / Derived from** — lineage
+Every relation needs a sentence explaining why.
 
-For every relation, record a sentence in this form:
+Weak:
+`둘 다 UI 도구이기 때문`
+
+Strong:
+`Amicro는 Motion 기반 component source를 제공하고 transitions.dev는 motion selection/audit/refine 규칙을 agent skill로 제공하므로 asset layer → operating-knowledge layer 관계다.`
+
+### STEP 9 — Cascade-update existing wiki pages
+
+This is the main 2.0 change.
+
+After creating the source record, search for existing pages that should become better because of this source.
+
+Update:
+
+- concept pages
+- comparison pages
+- overview/resource maps
+- related atomic notes
+- relation reasons
+- historical/current fact distinctions
+
+Do not rewrite old source history. Add a clearly labeled follow-up update when a newer source changes a compiled overview.
+
+### STEP 10 — Create Recall Cards
+
+Create exactly one child page named `큐`.
+
+Format:
 
 ```text
-B — <A의 어떤 속성과 B의 어떤 속성이 어떤 메커니즘으로 연결되는지>.
+### Qn. <focused question>
+
+**힌트:** <minimal retrieval cue>
+
+<details>
+<summary>정답보기</summary>
+    <concise complete answer>
+</details>
 ```
 
-Reject weak explanations such as “둘 다 AI 도구이기 때문”.
+Prioritize:
 
-### 8. Build cues after the article and research stabilize
-
-Cues test the final understanding, not the raw source text.
-
-Include updated research when it materially changes interpretation. Typical cue targets:
-
-- causal bottleneck
+- structure
+- causality
 - mechanism
-- category structure
-- important comparison
-- application rule
-- historical claim vs current verified fact
-- why two notes are connected
+- comparison
+- application
+- source-vs-current discrepancy
+- why relations exist
 
-### 9. Verify persistence
+Do not create trivia merely to increase card count.
 
-Before reporting success, verify:
+For `No material`, do not invent new cards. Point the cue page to existing relevant cards or explicitly state that no new recall item was created.
 
-- exact source URL exists
-- article record is in Recall Cards with `유형=원문`
-- metadata is populated
-- child `큐` page exists
-- all meaningful outbound URLs are preserved
-- reusable outbound resources have atomic notes
-- source relations are present
-- Zettelkasten relation reasons are present
-- verification states match evidence
-- no unverified claim is written as fact
+## Query behavior
 
-Report incomplete parts explicitly.
-
-## Retrieval behavior
-
-When the user later asks questions such as:
+When the user asks:
 
 - “내가 H3 관련해서 줬던 거 뭐였지?”
-- “최근 GitHub 프로젝트만 카테고리별로”
+- “최근 GitHub 프로젝트만”
 - “가속 관련만”
 - “서로 대체재인 것끼리 비교”
 
-retrieve using both metadata and relation semantics:
+query the **compiled wiki and graph first**, not chat memory and not raw sources first.
 
-1. Topic/set first
-2. Platform only when requested
-3. Function/category for grouping
-4. Relations and `연결 이유` for comparison or lineage
-5. Source date / added date for recency
+Use:
 
-Do not rely on chat memory when the Notion knowledge base contains the durable record.
+1. topic/set
+2. aliases
+3. category/function
+4. platform if requested
+5. relations + `연결 이유`
+6. verification state
+7. source/updated dates
 
-## Failure rules
+Raw/source records are evidence fallbacks, not the primary reading surface.
 
-### Source inaccessible
+## Lint
 
-- preserve URL
-- mark `미확인`
-- record retrieval failure
-- do not invent source body, links, or cues
+Run a lightweight lint after every ingest and a full lint on demand.
 
-### Outbound link inaccessible
+Flag:
 
-- preserve URL
-- mark resource `미확인` or `부분 확인`
-- describe only what the source itself establishes
+- duplicate source URLs
+- same resource under multiple names without aliasing
+- Resource Note with no source/provenance
+- relation with empty `연결 이유`
+- orphan resource or wiki page
+- `미확인` claim presented as fact
+- current value overwriting historical source claim
+- conflicting claims not marked `Disputed`
+- new source that should have updated an existing wiki page but did not
+- wiki page with no recent supporting source after material upstream changes
+- source and wiki roles being conflated
+- outbound URLs lost during rewriting
+- stale redirect/canonical URLs
 
-### Conflicting evidence
+## Grounding invariant
 
-- preserve both claims
-- identify source/date of each
-- do not force a false reconciliation
+Every load-bearing number, date, quote, version, or comparative claim in a wiki page must be traceable to a preserved Source Note or authoritative Resource Note.
 
-### Existing note found
+If the evidence cannot support the precision of a claim, lower the claim's precision.
 
-Update the existing note rather than create a duplicate. Preserve prior valid metadata and relations.
+Do not upgrade confidence because multiple secondary pages repeat the same unsupported claim.
+
+## Persistence verification
+
+Before reporting success, verify:
+
+- exact source URL preserved
+- source article exists
+- metadata populated
+- `수집 판정` set
+- outbound URLs preserved
+- reusable outbound objects have Resource Notes
+- affected existing wiki pages were searched
+- cascade updates applied where material
+- relations have explicit reasons
+- child `큐` exists
+- verification states match evidence
+- no historical claim was silently overwritten
 
 ## Definition of done
 
-PASS only when the run leaves behind a source-preserving, searchable and reviewable knowledge package.
+PASS only when the source has improved the knowledge base, not merely added another page.
 
-A prose summary alone is FAIL.
-A bookmark list alone is FAIL.
-A Relation without an explicit reason is FAIL.
-A cue page outside its parent posting is FAIL.
-Current facts that overwrite the historical source claim are FAIL.
-Invented content from an inaccessible source is FAIL.
+FAIL if:
+
+- only a prose summary exists
+- only bookmarks exist
+- a new page was created without checking existing wiki pages
+- a material source did not trigger relevant cascade updates
+- a relation lacks an explanation
+- a source claim was overwritten by a current value
+- inaccessible content was invented
+- raw/source evidence and compiled wiki knowledge are treated as the same layer
